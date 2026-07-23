@@ -5,8 +5,7 @@ import {
   serverTimestamp,
   setDoc,
 } from 'firebase/firestore'
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage'
-import { db, storage } from '../lib/firebase'
+import { db } from '../lib/firebase'
 
 const DEMO_PROFILES_KEY = 'car-share-demo-profiles'
 
@@ -24,6 +23,7 @@ function writeDemoProfile(uid, profile) {
   localStorage.setItem(DEMO_PROFILES_KEY, JSON.stringify(profiles))
 }
 
+/** Photos = URL Google Auth uniquement (pas de Firebase Storage). */
 export const firestoreProfileService = {
   subscribe(uid, onData, onError) {
     if (!uid) {
@@ -40,25 +40,6 @@ export const firestoreProfileService = {
   async get(uid) {
     const snapshot = await getDoc(doc(db, 'profiles', uid))
     return snapshot.exists() ? { uid, ...snapshot.data() } : null
-  },
-
-  async uploadPhoto(user, file) {
-    if (!file?.type?.startsWith('image/')) throw new Error('Choisissez une image.')
-    if (file.size > 5 * 1024 * 1024) throw new Error('Image trop lourde (max 5 Mo).')
-    const extension = file.name.split('.').pop()?.toLowerCase() || 'jpg'
-    const objectRef = ref(storage, `profiles/${user.uid}/avatar.${extension}`)
-    await uploadBytes(objectRef, file, { contentType: file.type })
-    const photoURL = await getDownloadURL(objectRef)
-    await setDoc(
-      doc(db, 'profiles', user.uid),
-      {
-        displayName: user.displayName || user.firstName || 'Utilisateur',
-        photoURL,
-        updatedAt: serverTimestamp(),
-      },
-      { merge: true },
-    )
-    return photoURL
   },
 
   async ensureFromAuth(user) {
@@ -88,13 +69,10 @@ export const demoProfileService = {
   async get(uid) {
     return readDemoProfiles()[uid] || null
   },
-  async uploadPhoto(user, file) {
-    const photoURL = await new Promise((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () => resolve(reader.result)
-      reader.onerror = () => reject(new Error('Impossible de lire l’image.'))
-      reader.readAsDataURL(file)
-    })
+  async ensureFromAuth(user) {
+    if (!user?.uid) return null
+    const photoURL = user.photoURL || null
+    if (!photoURL) return null
     writeDemoProfile(user.uid, {
       uid: user.uid,
       displayName: user.displayName || user.firstName,
@@ -102,8 +80,5 @@ export const demoProfileService = {
       updatedAt: Date.now(),
     })
     return photoURL
-  },
-  async ensureFromAuth() {
-    return null
   },
 }

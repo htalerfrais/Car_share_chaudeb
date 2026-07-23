@@ -7,7 +7,7 @@ import {
   where,
 } from 'firebase/firestore'
 import { db } from '../lib/firebase'
-import { demoProfileService, firestoreProfileService } from '../services/profileService'
+import { firestoreProfileService } from '../services/profileService'
 
 const DEMO_PROFILES_KEY = 'car-share-demo-profiles'
 
@@ -63,7 +63,11 @@ export function useProfiles({ uids, isDemo, currentUser }) {
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe())
   }, [isDemo, uniqueIds.join('|')])
 
-  const service = isDemo ? demoProfileService : firestoreProfileService
+  useEffect(() => {
+    if (!currentUser || isDemo) return undefined
+    firestoreProfileService.ensureFromAuth(currentUser).catch(() => {})
+    return undefined
+  }, [currentUser, isDemo])
 
   const resolvedPhotoURL =
     profiles[currentUser?.uid]?.photoURL
@@ -73,18 +77,5 @@ export function useProfiles({ uids, isDemo, currentUser }) {
   return {
     profiles,
     photoURL: resolvedPhotoURL,
-    async uploadPhoto(file) {
-      if (!currentUser) throw new Error('Connectez-vous pour ajouter une photo.')
-      const photoURL = await service.uploadPhoto(currentUser, file)
-      setProfiles((current) => ({
-        ...current,
-        [currentUser.uid]: {
-          uid: currentUser.uid,
-          displayName: currentUser.displayName || currentUser.firstName,
-          photoURL,
-        },
-      }))
-      return photoURL
-    },
   }
 }

@@ -35,6 +35,8 @@ VITE_DATA_MODE=demo
 
 ## Configuration Firebase
 
+- **Project ID** : `care-share-chaudeb` (voir aussi `.firebaserc`)
+
 Le dépôt ne contient aucun secret. Copier `.env.example` vers `.env.local`, créer/choisir un projet Firebase et renseigner la configuration de son application Web :
 
 ```env
@@ -50,18 +52,17 @@ VITE_FIREBASE_APP_ID=...
 
 1. Vérifier les outils : `npx -y firebase-tools@latest --version`.
 2. Se connecter : `npx -y firebase-tools@latest login`.
-3. Associer le projet : `npx -y firebase-tools@latest use --add`.
+3. Associer le projet : `npx -y firebase-tools@latest use care-share-chaudeb`.
 4. Vérifier l'édition et la base Firestore :
-   `npx -y firebase-tools@latest firestore:databases:list --project <PROJECT_ID>`.
+   `npx -y firebase-tools@latest firestore:databases:list --project care-share-chaudeb`.
 5. Créer une application Web si nécessaire puis obtenir sa configuration avec
-   `npx -y firebase-tools@latest apps:sdkconfig WEB <APP_ID> --project <PROJECT_ID>`.
+   `npx -y firebase-tools@latest apps:sdkconfig WEB <APP_ID> --project care-share-chaudeb`.
 6. Activer Google dans **Authentication → Sign-in method** et ajouter les domaines autorisés (`localhost`, sans protocole ni port).
 7. Créer la base Firestore. L'implémentation et les règles ciblent l'édition Standard et la base `(default)` ; vérifier cette hypothèse avant déploiement.
 8. Valider puis déployer les règles :
 
 ```sh
-npx -y firebase-tools@latest emulators:start --only firestore,auth
-npx -y firebase-tools@latest deploy --only firestore:rules --project <PROJECT_ID>
+npx -y firebase-tools@latest deploy --only firestore:rules --project care-share-chaudeb
 ```
 
 Le mode `mock` n'émet aucun token Firebase. Il est donc volontairement incompatible avec les règles sécurisées. Utiliser `mock + demo` pour l'UI, ou `google + firestore` pour les vraies données.
@@ -107,18 +108,11 @@ Les règles Firestore ne savent pas itérer sur une liste variable pour prouver,
 
 Consulter `docs/firestore-security-analysis.md` pour les invariants, la revue contradictoire et les hypothèses. Les règles restent un prototype à tester sur émulateur puis à revoir avant une diffusion large.
 
-## Photos de profil et Storage
+## Photos de profil
 
-1. Activez **Storage** dans la console Firebase.
-2. Déployez les règles :
+Pas de Firebase Storage (évite le plan payant). Les avatars utilisent la **photo Google Auth**, synchronisée dans `profiles/{uid}` (Firestore, URL uniquement). Sinon, initiales.
 
-```sh
-npx -y firebase-tools@latest deploy --only storage --project <PROJECT_ID>
-npx -y firebase-tools@latest deploy --only firestore:rules --project <PROJECT_ID>
-```
-
-Les avatars sont stockés dans `profiles/{uid}/…` (Storage) et référencés dans `profiles/{uid}` (Firestore).
-Le coffre est un tableau `trunk` sur chaque document `cars/{carId}`.
+Le coffre reste un tableau `trunk` sur chaque document `cars/{carId}`.
 
 ## Commandes
 
@@ -136,5 +130,4 @@ npm run build
 - `src/hooks/useCars.js` : abonnement temps réel ;
 - `src/components/` : écrans, formulaire, liste, cartes, waitlist et notifications ;
 - `firestore.rules` : règles de sécurité ;
-- `storage.rules` : règles Storage pour les avatars ;
 - `.env.example` : variables attendues sans secrets.

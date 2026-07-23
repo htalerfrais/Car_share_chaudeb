@@ -60,7 +60,6 @@ h1, h2, h3 { font-family: 'Manrope', sans-serif; letter-spacing: -.035em; }
 .avatar-lg { width: 64px; height: 64px; font-size: 22px; }
 .avatar-seat { width: 36px; height: 36px; font-size: 13px; border: 2px solid white; box-shadow: 0 4px 10px rgba(16, 45, 38, .18); }
 .avatar-small { width: 30px; height: 30px; font-size: 13px; }
-.profile-avatar-wrap { cursor: pointer; display: inline-flex; }
 .profile-name { font-weight: 700; }
 .demo-badge, .count-pill { border-radius: 99px; background: var(--green-soft); color: var(--green); padding: 6px 10px; font-size: 12px; font-weight: 700; }
 
@@ -340,14 +339,10 @@ input:hover, select:hover { border-color: #91a59d; }
 }
 .user-dock-inner p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
 .dock-avatar-wrap {
-  position: relative;
-  cursor: pointer;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
 }
-.dock-avatar-hint { font-size: 10px; font-weight: 800; color: var(--green); text-transform: uppercase; letter-spacing: .06em; }
 
 .empty-state, .loading-panel, .error-panel { text-align: center; padding: 55px 25px; grid-column: 1 / -1; }
 .empty-state > span { font-size: 35px; color: var(--green); }

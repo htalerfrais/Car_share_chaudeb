@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { AddCarForm } from './components/AddCarForm'
 import { CarList } from './components/CarList'
 import { Header } from './components/Header'
@@ -9,14 +9,10 @@ import { useAuth } from './contexts/AuthContext'
 import { useCars } from './hooks/useCars'
 import { useProfiles } from './hooks/useProfiles'
 import { firebaseConfigured } from './lib/firebase'
-import { firestoreProfileService } from './services/profileService'
 
 function errorMessage(error) {
   if (error?.code === 'permission-denied') {
-    return 'Accès refusé par Firestore. Vérifiez la connexion Google et les règles déployées (Firestore + Storage).'
-  }
-  if (error?.code === 'storage/unauthorized') {
-    return 'Upload refusé. Déployez les règles Storage et reconnectez-vous.'
+    return 'Accès refusé par Firestore. Vérifiez la connexion Google et les règles déployées.'
   }
   if (error?.code === 'unavailable') return 'Service temporairement indisponible. Réessayez dans un instant.'
   if (error?.code === 'auth/popup-closed-by-user') return 'La fenêtre de connexion a été fermée.'
@@ -82,17 +78,11 @@ export default function App() {
     return ids
   }, [cars, user])
 
-  const { profiles, photoURL, uploadPhoto } = useProfiles({
+  const { profiles, photoURL } = useProfiles({
     uids: profileUids,
     isDemo,
     currentUser: user,
   })
-
-  useEffect(() => {
-    if (!user || isDemo || needsConfiguration) return undefined
-    firestoreProfileService.ensureFromAuth(user).catch(() => {})
-    return undefined
-  }, [user, isDemo, needsConfiguration])
 
   async function run(action, successMessage) {
     setBusy(true)
@@ -136,11 +126,7 @@ export default function App() {
 
   return (
     <>
-      <Header
-        isDemo={isDemo}
-        photoURL={photoURL}
-        onChangePhoto={(file) => run(() => uploadPhoto(file), 'Photo de profil mise à jour.')}
-      />
+      <Header isDemo={isDemo} photoURL={photoURL} />
       <main className={`app-shell ${userCar ? '' : 'has-dock'}`}>
         <section className="hero">
           <div>
@@ -214,13 +200,7 @@ export default function App() {
         </section>
       </main>
 
-      <UserDock
-        user={user}
-        photoURL={photoURL}
-        busy={busy}
-        visible={!userCar}
-        onChangePhoto={(file) => run(() => uploadPhoto(file), 'Photo de profil mise à jour.')}
-      />
+      <UserDock user={user} photoURL={photoURL} visible={!userCar} />
 
       <ConfirmDialog
         car={deletingCar}

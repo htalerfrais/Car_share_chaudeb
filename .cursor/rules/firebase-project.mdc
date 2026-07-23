@@ -1,0 +1,27 @@
+---
+description: Firebase project ID and ready deploy commands for this app
+alwaysApply: true
+---
+
+# Firebase — projet de ce repo
+
+- **Project ID** : `care-share-chaudeb`
+- Fichier `.firebaserc` pointe déjà dessus (`default`).
+- Pas de Firebase Storage (gratuit / hors scope) : avatars = photo Google via Firestore `profiles/{uid}`.
+
+Quand l’utilisateur demande un déploiement ou des commandes Firebase, utiliser directement cet ID, sans demander le project ID.
+
+## Commandes prêtes
+
+```powershell
+npx -y firebase-tools@latest login
+npx -y firebase-tools@latest use care-share-chaudeb
+npx -y firebase-tools@latest deploy --only firestore:rules --project care-share-chaudeb
+```
+
+Vérifications utiles :
+
+```powershell
+npx -y firebase-tools@latest firestore:databases:list --project care-share-chaudeb
+npx -y firebase-tools@latest apps:list --project care-share-chaudeb
+```
