@@ -107,6 +107,19 @@ Les règles Firestore ne savent pas itérer sur une liste variable pour prouver,
 
 Consulter `docs/firestore-security-analysis.md` pour les invariants, la revue contradictoire et les hypothèses. Les règles restent un prototype à tester sur émulateur puis à revoir avant une diffusion large.
 
+## Photos de profil et Storage
+
+1. Activez **Storage** dans la console Firebase.
+2. Déployez les règles :
+
+```sh
+npx -y firebase-tools@latest deploy --only storage --project <PROJECT_ID>
+npx -y firebase-tools@latest deploy --only firestore:rules --project <PROJECT_ID>
+```
+
+Les avatars sont stockés dans `profiles/{uid}/…` (Storage) et référencés dans `profiles/{uid}` (Firestore).
+Le coffre est un tableau `trunk` sur chaque document `cars/{carId}`.
+
 ## Commandes
 
 ```sh
@@ -123,4 +136,5 @@ npm run build
 - `src/hooks/useCars.js` : abonnement temps réel ;
 - `src/components/` : écrans, formulaire, liste, cartes, waitlist et notifications ;
 - `firestore.rules` : règles de sécurité ;
+- `storage.rules` : règles Storage pour les avatars ;
 - `.env.example` : variables attendues sans secrets.

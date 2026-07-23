@@ -6,6 +6,7 @@ import {
   query,
   runTransaction,
   serverTimestamp,
+  Timestamp,
 } from 'firebase/firestore'
 import { db } from '../lib/firebase'
 
@@ -25,6 +26,7 @@ const memberIds = (car) => [
   ...car.passengers.map((member) => member.uid),
   ...car.waitlist.map((member) => member.uid),
 ]
+const trunkOf = (car) => (Array.isArray(car.trunk) ? car.trunk : [])
 
 function validateCarInput(input, minimumSeats = 1) {
   const city = input.city.trim()
@@ -38,8 +40,26 @@ function validateCarInput(input, minimumSeats = 1) {
   return { city, time, seats }
 }
 
+function normalizeCar(id, data) {
+  return {
+    id,
+    ...data,
+    passengers: data.passengers || [],
+    waitlist: data.waitlist || [],
+    trunk: trunkOf(data),
+  }
+}
+
 function normalizeSnapshot(snapshot) {
-  return snapshot.docs.map((item) => ({ id: item.id, ...item.data() }))
+  return snapshot.docs.map((item) => normalizeCar(item.id, item.data()))
+}
+
+function validateTrunkText(text) {
+  const clean = text.trim()
+  if (clean.length < 1 || clean.length > 200) {
+    throw new BusinessError('L’objet du coffre doit contenir 1 à 200 caractères.')
+  }
+  return clean
 }
 
 export const firestoreCarService = {
@@ -57,13 +77,21 @@ export const firestoreCarService = {
     const membershipRef = doc(db, 'memberships', user.uid)
     await runTransaction(db, async (transaction) => {
       const membership = await transaction.get(membershipRef)
-      if (membership.exists()) throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
+      if (membership.exists()) {
+        const existingCarRef = doc(db, 'cars', membership.data().carId)
+        const existingCar = await transaction.get(existingCarRef)
+        if (existingCar.exists()) {
+          throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
+        }
+        transaction.delete(membershipRef)
+      }
       const driver = publicUser(user)
       transaction.set(carRef, {
         ...values,
         driver,
         passengers: [],
         waitlist: [],
+        trunk: [],
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       })
@@ -84,7 +112,7 @@ export const firestoreCarService = {
       if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
       const car = snapshot.data()
       if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut modifier cette voiture.')
-      const values = validateCarInput(input, car.passengers.length + 1)
+      const values = validateCarInput(input, (car.passengers || []).length + 1)
       transaction.update(carRef, { ...values, updatedAt: serverTimestamp() })
     })
   },
@@ -95,17 +123,26 @@ export const firestoreCarService = {
     await runTransaction(db, async (transaction) => {
       const membership = await transaction.get(membershipRef)
       const snapshot = await transaction.get(carRef)
-      if (membership.exists()) throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
+      if (membership.exists()) {
+        const existingCarRef = doc(db, 'cars', membership.data().carId)
+        const existingCar = await transaction.get(existingCarRef)
+        if (existingCar.exists()) {
+          throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
+        }
+        transaction.delete(membershipRef)
+      }
       if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
       const car = snapshot.data()
       const member = publicUser(user)
-      const role = car.passengers.length + 1 < car.seats ? 'passenger' : 'waitlist'
-      if (role === 'waitlist' && car.waitlist.length >= 30) {
+      const passengers = car.passengers || []
+      const waitlist = car.waitlist || []
+      const role = passengers.length + 1 < car.seats ? 'passenger' : 'waitlist'
+      if (role === 'waitlist' && waitlist.length >= 30) {
         throw new BusinessError('La liste d’attente est complète.')
       }
       transaction.update(carRef, {
         [role === 'passenger' ? 'passengers' : 'waitlist']: [
-          ...(role === 'passenger' ? car.passengers : car.waitlist),
+          ...(role === 'passenger' ? passengers : waitlist),
           member,
         ],
         updatedAt: serverTimestamp(),
@@ -136,8 +173,8 @@ export const firestoreCarService = {
       const car = snapshot.data()
       if (car.driver.uid === user.uid) throw new BusinessError('Supprimez votre voiture pour la quitter.')
       transaction.update(carRef, {
-        passengers: car.passengers.filter((member) => member.uid !== user.uid),
-        waitlist: car.waitlist.filter((member) => member.uid !== user.uid),
+        passengers: (car.passengers || []).filter((member) => member.uid !== user.uid),
+        waitlist: (car.waitlist || []).filter((member) => member.uid !== user.uid),
         updatedAt: serverTimestamp(),
       })
       transaction.delete(membershipRef)
@@ -151,17 +188,70 @@ export const firestoreCarService = {
       if (!snapshot.exists()) return
       const car = snapshot.data()
       if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut supprimer cette voiture.')
-      const membershipRefs = memberIds(car).map((uid) => doc(db, 'memberships', uid))
+      const membershipRefs = memberIds(normalizeCar(carId, car)).map((uid) => doc(db, 'memberships', uid))
       for (const ref of membershipRefs) await transaction.get(ref)
       transaction.delete(carRef)
       membershipRefs.forEach((ref) => transaction.delete(ref))
+    })
+  },
+
+  async addTrunkItem(user, carId, text) {
+    const clean = validateTrunkText(text)
+    const carRef = doc(db, 'cars', carId)
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(carRef)
+      if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
+      const trunk = trunkOf(snapshot.data())
+      if (trunk.length >= 200) throw new BusinessError('Le coffre est plein.')
+      transaction.update(carRef, {
+        trunk: [
+          ...trunk,
+          {
+            id: crypto.randomUUID(),
+            text: clean,
+            authorUid: user.uid,
+            authorName: user.firstName || user.displayName,
+            createdAt: Timestamp.now(),
+          },
+        ],
+        updatedAt: serverTimestamp(),
+      })
+    })
+  },
+
+  async updateTrunkItem(user, carId, itemId, text) {
+    const clean = validateTrunkText(text)
+    const carRef = doc(db, 'cars', carId)
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(carRef)
+      if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
+      const trunk = trunkOf(snapshot.data())
+      if (!trunk.some((item) => item.id === itemId)) throw new BusinessError('Cet objet n’existe plus.')
+      transaction.update(carRef, {
+        trunk: trunk.map((item) => (item.id === itemId ? { ...item, text: clean } : item)),
+        updatedAt: serverTimestamp(),
+      })
+    })
+  },
+
+  async removeTrunkItem(user, carId, itemId) {
+    const carRef = doc(db, 'cars', carId)
+    await runTransaction(db, async (transaction) => {
+      const snapshot = await transaction.get(carRef)
+      if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
+      transaction.update(carRef, {
+        trunk: trunkOf(snapshot.data()).filter((item) => item.id !== itemId),
+        updatedAt: serverTimestamp(),
+      })
     })
   },
 }
 
 function readDemoCars() {
   try {
-    return JSON.parse(localStorage.getItem(DEMO_KEY)) || []
+    return (JSON.parse(localStorage.getItem(DEMO_KEY)) || []).map((car) =>
+      normalizeCar(car.id, car),
+    )
   } catch {
     return []
   }
@@ -202,6 +292,7 @@ export const demoCarService = {
           driver: publicUser(user),
           passengers: [],
           waitlist: [],
+          trunk: [],
           createdAt: Date.now(),
           updatedAt: Date.now(),
         },
@@ -248,6 +339,53 @@ export const demoCarService = {
         if (car.id !== carId) return true
         if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut supprimer cette voiture.')
         return false
+      }),
+    )
+  },
+  async addTrunkItem(user, carId, text) {
+    const clean = validateTrunkText(text)
+    mutateDemo(user, (cars) =>
+      cars.map((car) => {
+        if (car.id !== carId) return car
+        return {
+          ...car,
+          trunk: [
+            ...trunkOf(car),
+            {
+              id: crypto.randomUUID(),
+              text: clean,
+              authorUid: user.uid,
+              authorName: user.firstName || user.displayName,
+              createdAt: Date.now(),
+            },
+          ],
+          updatedAt: Date.now(),
+        }
+      }),
+    )
+  },
+  async updateTrunkItem(user, carId, itemId, text) {
+    const clean = validateTrunkText(text)
+    mutateDemo(user, (cars) =>
+      cars.map((car) => {
+        if (car.id !== carId) return car
+        return {
+          ...car,
+          trunk: trunkOf(car).map((item) => (item.id === itemId ? { ...item, text: clean } : item)),
+          updatedAt: Date.now(),
+        }
+      }),
+    )
+  },
+  async removeTrunkItem(user, carId, itemId) {
+    mutateDemo(user, (cars) =>
+      cars.map((car) => {
+        if (car.id !== carId) return car
+        return {
+          ...car,
+          trunk: trunkOf(car).filter((item) => item.id !== itemId),
+          updatedAt: Date.now(),
+        }
       }),
     )
   },

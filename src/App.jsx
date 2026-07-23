@@ -1,16 +1,22 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AddCarForm } from './components/AddCarForm'
 import { CarList } from './components/CarList'
 import { Header } from './components/Header'
 import { LoginScreen } from './components/LoginScreen'
 import { ConfirmDialog, Toast } from './components/Toast'
+import { UserDock } from './components/UserDock'
 import { useAuth } from './contexts/AuthContext'
 import { useCars } from './hooks/useCars'
+import { useProfiles } from './hooks/useProfiles'
 import { firebaseConfigured } from './lib/firebase'
+import { firestoreProfileService } from './services/profileService'
 
 function errorMessage(error) {
   if (error?.code === 'permission-denied') {
-    return 'Accès refusé par Firestore. Vérifiez la connexion Google et les règles déployées.'
+    return 'Accès refusé par Firestore. Vérifiez la connexion Google et les règles déployées (Firestore + Storage).'
+  }
+  if (error?.code === 'storage/unauthorized') {
+    return 'Upload refusé. Déployez les règles Storage et reconnectez-vous.'
   }
   if (error?.code === 'unavailable') return 'Service temporairement indisponible. Réessayez dans un instant.'
   if (error?.code === 'auth/popup-closed-by-user') return 'La fenêtre de connexion a été fermée.'
@@ -56,12 +62,37 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [editingCar, setEditingCar] = useState(null)
   const [deletingCar, setDeletingCar] = useState(null)
+  const [proposing, setProposing] = useState(false)
 
   const notify = useCallback((message, type = 'success') => setToast({ message, type }), [])
   const userCar = useMemo(
     () => user && cars.find((car) => [car.driver, ...car.passengers, ...car.waitlist].some((member) => member.uid === user.uid)),
     [cars, user],
   )
+
+  const profileUids = useMemo(() => {
+    const ids = []
+    if (user?.uid) ids.push(user.uid)
+    cars.forEach((car) => {
+      ids.push(car.driver.uid)
+      car.passengers.forEach((member) => ids.push(member.uid))
+      car.waitlist.forEach((member) => ids.push(member.uid))
+      car.trunk.forEach((item) => ids.push(item.authorUid))
+    })
+    return ids
+  }, [cars, user])
+
+  const { profiles, photoURL, uploadPhoto } = useProfiles({
+    uids: profileUids,
+    isDemo,
+    currentUser: user,
+  })
+
+  useEffect(() => {
+    if (!user || isDemo || needsConfiguration) return undefined
+    firestoreProfileService.ensureFromAuth(user).catch(() => {})
+    return undefined
+  }, [user, isDemo, needsConfiguration])
 
   async function run(action, successMessage) {
     setBusy(true)
@@ -82,7 +113,7 @@ export default function App() {
   if (needsConfiguration) {
     return (
       <>
-        <Header isDemo={false} />
+        <Header isDemo={false} photoURL={null} />
         <ConfigurationScreen
           onUseDemo={() => {
             enableDemoAuth()
@@ -96,7 +127,7 @@ export default function App() {
   if (!user) {
     return (
       <>
-        <Header isDemo={isDemo} />
+        <Header isDemo={isDemo} photoURL={null} />
         <LoginScreen onError={(message) => notify(message, 'error')} />
         <Toast toast={toast} onClose={() => setToast(null)} />
       </>
@@ -105,8 +136,12 @@ export default function App() {
 
   return (
     <>
-      <Header isDemo={isDemo} />
-      <main className="app-shell">
+      <Header
+        isDemo={isDemo}
+        photoURL={photoURL}
+        onChangePhoto={(file) => run(() => uploadPhoto(file), 'Photo de profil mise à jour.')}
+      />
+      <main className={`app-shell ${userCar ? '' : 'has-dock'}`}>
         <section className="hero">
           <div>
             <span className="eyebrow">Notre prochain trajet</span>
@@ -118,14 +153,22 @@ export default function App() {
           </div>
         </section>
 
-        {!userCar && <AddCarForm onSave={(values) => run(() => service.createCar(user, values), 'Votre voiture est proposée.')} />}
-        {editingCar && (
+        {(proposing || editingCar) && (
           <AddCarForm
             car={editingCar}
-            onCancel={() => setEditingCar(null)}
+            onCancel={() => {
+              setProposing(false)
+              setEditingCar(null)
+            }}
             onSave={async (values) => {
-              const saved = await run(() => service.updateCar(user, editingCar.id, values), 'Voiture mise à jour.')
-              if (saved) setEditingCar(null)
+              if (editingCar) {
+                const saved = await run(() => service.updateCar(user, editingCar.id, values), 'Voiture mise à jour.')
+                if (saved) setEditingCar(null)
+                return saved
+              }
+              const saved = await run(() => service.createCar(user, values), 'Votre voiture est proposée.')
+              if (saved) setProposing(false)
+              return saved
             }}
           />
         )}
@@ -150,20 +193,34 @@ export default function App() {
               cars={cars}
               user={user}
               userCarId={userCar?.id}
+              profiles={profiles}
               busy={busy}
+              canPropose={!userCar && !proposing}
+              onPropose={() => setProposing(true)}
               onJoin={(car) =>
                 run(
                   () => service.joinCar(user, car.id),
-                  car.passengers.length + 1 < car.seats ? 'Place réservée.' : 'Ajouté·e à la liste d’attente.',
+                  car.passengers.length + 1 < car.seats ? 'Place réservée.' : 'Ajouté·e à la file d’attente.',
                 )
               }
               onLeave={(car) => run(() => service.leaveCar(user, car.id), 'Vous avez quitté la voiture.')}
               onEdit={setEditingCar}
               onDelete={setDeletingCar}
+              onAddTrunk={(car, text) => run(() => service.addTrunkItem(user, car.id, text), 'Ajouté au coffre.')}
+              onUpdateTrunk={(car, itemId, text) => run(() => service.updateTrunkItem(user, car.id, itemId, text), 'Coffre mis à jour.')}
+              onRemoveTrunk={(car, itemId) => run(() => service.removeTrunkItem(user, car.id, itemId), 'Objet retiré.')}
             />
           )}
         </section>
       </main>
+
+      <UserDock
+        user={user}
+        photoURL={photoURL}
+        busy={busy}
+        visible={!userCar}
+        onChangePhoto={(file) => run(() => uploadPhoto(file), 'Photo de profil mise à jour.')}
+      />
 
       <ConfirmDialog
         car={deletingCar}

@@ -1,16 +1,19 @@
-export function Waitlist({ members }) {
+import { Avatar } from './Avatar'
+
+export function Waitlist({ members, profiles = {} }) {
   if (!members.length) return null
   return (
-    <div className="waitlist">
-      <strong>Liste d’attente · {members.length}</strong>
-      <div className="member-row">
+    <div className="waitlist-queue" aria-label={`Liste d’attente, ${members.length} personne${members.length > 1 ? 's' : ''}`}>
+      <div className="waitlist-label">File d’attente</div>
+      <div className="waitlist-track">
         {members.map((member, index) => (
-          <span className="member-chip waiting" key={member.uid}>
-            {index + 1}. {member.name}
-          </span>
+          <div className="waitlist-person" key={member.uid} title={`${index + 1}. ${member.name}`}>
+            <Avatar name={member.name} photoURL={profiles[member.uid]?.photoURL} size="sm" />
+            <span>{member.name}</span>
+          </div>
         ))}
       </div>
-      <p>Les inscriptions restent en attente même si une place se libère.</p>
+      <p className="waitlist-note">Pas de promotion auto si une place se libère.</p>
     </div>
   )
 }

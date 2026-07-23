@@ -1,39 +1,53 @@
+import { Avatar } from './Avatar'
+import { CarVisual } from './CarVisual'
+import { Trunk } from './Trunk'
 import { Waitlist } from './Waitlist'
 
-export function CarCard({ car, user, userCarId, onJoin, onLeave, onEdit, onDelete, busy }) {
+export function CarCard({
+  car,
+  user,
+  userCarId,
+  profiles,
+  onJoin,
+  onLeave,
+  onEdit,
+  onDelete,
+  onAddTrunk,
+  onUpdateTrunk,
+  onRemoveTrunk,
+  busy,
+}) {
   const isDriver = car.driver.uid === user.uid
   const isPassenger = car.passengers.some((member) => member.uid === user.uid)
   const isWaiting = car.waitlist.some((member) => member.uid === user.uid)
-  const occupied = car.passengers.length + 1
-  const available = Math.max(0, car.seats - occupied)
+  const available = Math.max(0, car.seats - car.passengers.length - 1)
   const isLinkedElsewhere = Boolean(userCarId && userCarId !== car.id)
+  const timeLabel = car.time.replace(':', ' h ')
 
   return (
     <article className={`car-card ${isDriver || isPassenger || isWaiting ? 'car-card-active' : ''}`}>
       <div className="car-card-top">
         <div>
-          <span className="route-icon" aria-hidden="true">● ─── ◉</span>
+          <span className="eyebrow">{timeLabel}</span>
           <h3>{car.city}</h3>
-          <p>Départ à <strong>{car.time}</strong></p>
-        </div>
-        <div className={`seat-count ${available === 0 ? 'full' : ''}`}>
-          <strong>{available}</strong>
-          <span>{available === 1 ? 'place libre' : 'places libres'}</span>
+          <p className="driver-meta">
+            <Avatar name={car.driver.name} photoURL={profiles[car.driver.uid]?.photoURL} size="xs" />
+            <span><strong>{car.driver.name}</strong> au volant</span>
+          </p>
         </div>
       </div>
 
-      <div className="driver-line">
-        <span className="avatar avatar-small">{car.driver.name.charAt(0).toUpperCase()}</span>
-        <span><strong>{car.driver.name}</strong> conduit · {occupied}/{car.seats} places</span>
-      </div>
+      <CarVisual car={car} profiles={profiles} />
+      <Waitlist members={car.waitlist} profiles={profiles} />
 
-      {car.passengers.length > 0 && (
-        <div className="member-row" aria-label="Passagers">
-          {car.passengers.map((member) => <span className="member-chip" key={member.uid}>{member.name}</span>)}
-        </div>
-      )}
-
-      <Waitlist members={car.waitlist} />
+      <Trunk
+        items={car.trunk}
+        busy={busy}
+        profiles={profiles}
+        onAdd={(text) => onAddTrunk(car, text)}
+        onUpdate={(itemId, text) => onUpdateTrunk(car, itemId, text)}
+        onRemove={(itemId) => onRemoveTrunk(car, itemId)}
+      />
 
       <div className="card-actions">
         {isDriver ? (
@@ -43,15 +57,31 @@ export function CarCard({ car, user, userCarId, onJoin, onLeave, onEdit, onDelet
           </>
         ) : isPassenger || isWaiting ? (
           <button className="button button-secondary" disabled={busy} onClick={() => onLeave(car)}>
-            {isWaiting ? 'Quitter la liste d’attente' : 'Quitter la voiture'}
+            {isWaiting ? 'Quitter la file' : 'Quitter la voiture'}
           </button>
         ) : (
           <button className="button button-primary" disabled={busy || isLinkedElsewhere} onClick={() => onJoin(car)}>
-            {available > 0 ? 'Rejoindre' : 'Rejoindre la liste d’attente'}
+            {available > 0 ? 'Monter' : 'Rejoindre la file'}
           </button>
         )}
       </div>
-      {isLinkedElsewhere && <p className="card-note">Vous êtes déjà inscrit·e dans une autre voiture.</p>}
+      {isLinkedElsewhere && <p className="card-note">Vous êtes déjà dans une autre voiture.</p>}
     </article>
+  )
+}
+
+export function GhostCarCard({ onClick, disabled }) {
+  return (
+    <button type="button" className="car-card ghost-car" onClick={onClick} disabled={disabled}>
+      <div className="ghost-car-visual" aria-hidden="true">
+        <div className="car-body ghost">
+          <div className="car-hood" />
+          <div className="car-cabin ghost-plus">+</div>
+          <div className="car-trunk-zone"><span>Coffre</span></div>
+        </div>
+      </div>
+      <strong>Ma voiture</strong>
+      <span>Proposez une voiture et prenez le volant</span>
+    </button>
   )
 }

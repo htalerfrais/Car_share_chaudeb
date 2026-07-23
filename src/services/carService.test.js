@@ -55,4 +55,16 @@ describe('demoCarService', () => {
       demoCarService.createCar(bob, { city: 'Paris', time: '09:00', seats: 2 }),
     ).resolves.toBeUndefined()
   })
+
+  it('gère le coffre sans limite UX', async () => {
+    await demoCarService.createCar(alice, { city: 'Lyon', time: '08:30', seats: 3 })
+    const [created] = currentCars()
+    await demoCarService.addTrunkItem(bob, created.id, 'Guitare')
+    expect(currentCars()[0].trunk[0].text).toBe('Guitare')
+    const itemId = currentCars()[0].trunk[0].id
+    await demoCarService.updateTrunkItem(alice, created.id, itemId, '2 guitares')
+    expect(currentCars()[0].trunk[0].text).toBe('2 guitares')
+    await demoCarService.removeTrunkItem(bob, created.id, itemId)
+    expect(currentCars()[0].trunk).toHaveLength(0)
+  })
 })

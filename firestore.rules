@@ -1,16 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // ===============================================================
-    // Modèle supposé
-    // cars/{carId}: city (2..80), time (HH:mm), seats (1..8),
-    // driver {uid,name}, passengers (0..7), waitlist (0..30),
-    // createdAt/updatedAt (timestamps).
-    // memberships/{uid}: uid, carId, role (driver|passenger|waitlist),
-    // displayName (1..40), createdAt (timestamp).
-    // Les documents ne contiennent pas d'e-mail ni d'autre donnée privée.
-    // ===============================================================
-
     function isAuthenticated() {
       return request.auth != null;
     }
@@ -38,6 +28,29 @@ service cloud.firestore {
         && member.name.size() <= 40;
     }
 
+    function validTrunkItem(item) {
+      return item is map
+        && item.keys().hasAll(['id', 'text', 'authorUid', 'authorName', 'createdAt'])
+        && item.keys().hasOnly(['id', 'text', 'authorUid', 'authorName', 'createdAt'])
+        && item.id is string
+        && item.id.size() >= 1
+        && item.id.size() <= 128
+        && item.text is string
+        && item.text.size() >= 1
+        && item.text.size() <= 200
+        && item.authorUid is string
+        && item.authorUid.size() >= 1
+        && item.authorUid.size() <= 128
+        && item.authorName is string
+        && item.authorName.size() >= 1
+        && item.authorName.size() <= 40
+        && item.createdAt is timestamp;
+    }
+
+    function validTrunk(list) {
+      return list is list && list.size() <= 200;
+    }
+
     function validCar(data) {
       return data.keys().hasAll([
           'city', 'time', 'seats', 'driver', 'passengers',
@@ -45,7 +58,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'city', 'time', 'seats', 'driver', 'passengers',
-          'waitlist', 'createdAt', 'updatedAt'
+          'waitlist', 'trunk', 'createdAt', 'updatedAt'
         ])
         && data.city is string
         && data.city.size() >= 2
@@ -60,6 +73,7 @@ service cloud.firestore {
         && data.passengers.size() <= 7
         && data.waitlist is list
         && data.waitlist.size() <= 30
+        && (!('trunk' in data) || validTrunk(data.trunk))
         && data.seats >= data.passengers.size() + 1
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -81,6 +95,18 @@ service cloud.firestore {
         && data.createdAt is timestamp;
     }
 
+    function validProfile(data) {
+      return data.keys().hasAll(['displayName', 'photoURL', 'updatedAt'])
+        && data.keys().hasOnly(['displayName', 'photoURL', 'updatedAt'])
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 40
+        && data.photoURL is string
+        && data.photoURL.size() >= 1
+        && data.photoURL.size() <= 2048
+        && data.updatedAt is timestamp;
+    }
+
     function memberFromMembership(data) {
       return {'uid': data.uid, 'name': data.displayName};
     }
@@ -90,12 +116,34 @@ service cloud.firestore {
         && request.resource.data.createdAt == resource.data.createdAt;
     }
 
+    function trunkOf(data) {
+      return 'trunk' in data ? data.trunk : [];
+    }
+
+    function sameTrunk() {
+      return trunkOf(request.resource.data) == trunkOf(resource.data);
+    }
+
     function driverEditOnly() {
       return request.auth.uid == resource.data.driver.uid
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly(['city', 'time', 'seats', 'updatedAt'])
         && request.resource.data.passengers == resource.data.passengers
-        && request.resource.data.waitlist == resource.data.waitlist;
+        && request.resource.data.waitlist == resource.data.waitlist
+        && sameTrunk();
+    }
+
+    function trunkEditOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(['trunk', 'updatedAt'])
+        && request.resource.data.city == resource.data.city
+        && request.resource.data.time == resource.data.time
+        && request.resource.data.seats == resource.data.seats
+        && request.resource.data.driver == resource.data.driver
+        && request.resource.data.passengers == resource.data.passengers
+        && request.resource.data.waitlist == resource.data.waitlist
+        && 'trunk' in request.resource.data
+        && validTrunk(request.resource.data.trunk);
     }
 
     function joining(carId, listName, role) {
@@ -108,6 +156,7 @@ service cloud.firestore {
         && membership.role == role
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly([listName, 'updatedAt'])
+        && sameTrunk()
         && request.resource.data[listName].size() == resource.data[listName].size() + 1
         && request.resource.data[listName].hasAll(resource.data[listName])
         && request.resource.data[listName].hasAny([memberFromMembership(membership)]);
@@ -121,6 +170,7 @@ service cloud.firestore {
         && !existsAfter(membershipPath(request.auth.uid))
         && request.resource.data.diff(resource.data).affectedKeys()
           .hasOnly([listName, 'updatedAt'])
+        && sameTrunk()
         && request.resource.data[listName].size() == resource.data[listName].size() - 1
         && resource.data[listName].hasAny([memberFromMembership(membership)])
         && !request.resource.data[listName].hasAny([memberFromMembership(membership)]);
@@ -155,6 +205,7 @@ service cloud.firestore {
         && request.resource.data.driver.uid == request.auth.uid
         && request.resource.data.passengers.size() == 0
         && request.resource.data.waitlist.size() == 0
+        && request.resource.data.trunk.size() == 0
         && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time
         && existsAfter(membershipPath(request.auth.uid))
@@ -167,14 +218,13 @@ service cloud.firestore {
         && request.resource.data.updatedAt == request.time
         && (
           driverEditOnly()
+          || trunkEditOnly()
           || joining(carId, 'passengers', 'passenger')
           || joining(carId, 'waitlist', 'waitlist')
           || leaving(carId, 'passengers', 'passenger')
           || leaving(carId, 'waitlist', 'waitlist')
         );
 
-      // La transaction applicative supprime également tous les memberships.
-      // Les règles autorisent leur suppression par le conducteur ci-dessous.
       allow delete: if isAuthenticated()
         && request.auth.uid == resource.data.driver.uid
         && !existsAfter(membershipPath(request.auth.uid));
@@ -200,6 +250,14 @@ service cloud.firestore {
             && !existsAfter(carPath(resource.data.carId))
           )
         );
+    }
+
+    match /profiles/{uid} {
+      allow read: if isAuthenticated();
+      allow create, update: if isOwner(uid)
+        && validProfile(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if isOwner(uid);
     }
 
     match /{document=**} {
