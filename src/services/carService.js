@@ -9,6 +9,14 @@ import {
   Timestamp,
 } from 'firebase/firestore'
 import { db } from '../lib/firebase'
+import {
+  LEGACY_DEFAULT_DATE,
+  LEG_ALLER,
+  isDateNotPast,
+  isValidISODate,
+  membershipDocId,
+  normalizeLeg,
+} from '../lib/trip'
 
 const DEMO_KEY = 'car-share-demo-cars'
 const DEMO_EVENT = 'car-share-demo-change'
@@ -28,22 +36,37 @@ const memberIds = (car) => [
 ]
 const trunkOf = (car) => (Array.isArray(car.trunk) ? car.trunk : [])
 
-function validateCarInput(input, minimumSeats = 1) {
+function validateCarInput(input, minimumSeats = 1, { requireFutureDate = true } = {}) {
   const city = input.city.trim()
   const time = input.time.trim()
   const seats = Number(input.seats)
-  if (city.length < 2 || city.length > 80) throw new BusinessError('La ville doit contenir 2 à 80 caractères.')
+  const leg = normalizeLeg(input.leg)
+  const date = (input.date || '').trim()
+
+  if (city.length < 2 || city.length > 80) {
+    throw new BusinessError(
+      leg === 'retour'
+        ? 'La destination doit contenir 2 à 80 caractères.'
+        : 'Le lieu de départ doit contenir 2 à 80 caractères.',
+    )
+  }
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new BusinessError('Choisissez une heure valide.')
   if (!Number.isInteger(seats) || seats < minimumSeats || seats > 8) {
     throw new BusinessError(`Le nombre de places doit être compris entre ${minimumSeats} et 8.`)
   }
-  return { city, time, seats }
+  if (!isValidISODate(date)) throw new BusinessError('Choisissez une date valide.')
+  if (requireFutureDate && !isDateNotPast(date)) {
+    throw new BusinessError('La date de départ ne peut pas être dans le passé.')
+  }
+  return { city, time, seats, leg, date }
 }
 
 function normalizeCar(id, data) {
   return {
     id,
     ...data,
+    leg: normalizeLeg(data.leg),
+    date: isValidISODate(data.date) ? data.date : LEGACY_DEFAULT_DATE,
     passengers: data.passengers || [],
     waitlist: data.waitlist || [],
     trunk: trunkOf(data),
@@ -62,6 +85,46 @@ function validateTrunkText(text) {
   return clean
 }
 
+function membershipRefFor(uid, leg) {
+  return doc(db, 'memberships', membershipDocId(uid, leg))
+}
+
+function legacyMembershipRef(uid) {
+  return doc(db, 'memberships', uid)
+}
+
+async function assertFreeForLeg(transaction, user, leg) {
+  const modernRef = membershipRefFor(user.uid, leg)
+  const modern = await transaction.get(modernRef)
+  if (modern.exists()) {
+    const existingCar = await transaction.get(doc(db, 'cars', modern.data().carId))
+    if (existingCar.exists()) {
+      throw new BusinessError(
+        leg === 'retour'
+          ? 'Vous êtes déjà lié·e à une voiture pour le retour.'
+          : 'Vous êtes déjà lié·e à une voiture pour l’aller.',
+      )
+    }
+    transaction.delete(modernRef)
+  }
+
+  // Anciens docs memberships/{uid} (avant aller/retour) : valables pour l'aller uniquement.
+  if (leg === LEG_ALLER) {
+    const legacyRef = legacyMembershipRef(user.uid)
+    const legacy = await transaction.get(legacyRef)
+    if (legacy.exists()) {
+      const existingCar = await transaction.get(doc(db, 'cars', legacy.data().carId))
+      if (existingCar.exists()) {
+        const existingLeg = normalizeLeg(existingCar.data().leg)
+        if (existingLeg === LEG_ALLER) {
+          throw new BusinessError('Vous êtes déjà lié·e à une voiture pour l’aller.')
+        }
+      }
+      transaction.delete(legacyRef)
+    }
+  }
+}
+
 export const firestoreCarService = {
   subscribe(onData, onError) {
     return onSnapshot(
@@ -74,17 +137,9 @@ export const firestoreCarService = {
   async createCar(user, input) {
     const values = validateCarInput(input)
     const carRef = doc(collection(db, 'cars'))
-    const membershipRef = doc(db, 'memberships', user.uid)
+    const membershipRef = membershipRefFor(user.uid, values.leg)
     await runTransaction(db, async (transaction) => {
-      const membership = await transaction.get(membershipRef)
-      if (membership.exists()) {
-        const existingCarRef = doc(db, 'cars', membership.data().carId)
-        const existingCar = await transaction.get(existingCarRef)
-        if (existingCar.exists()) {
-          throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
-        }
-        transaction.delete(membershipRef)
-      }
+      await assertFreeForLeg(transaction, user, values.leg)
       const driver = publicUser(user)
       transaction.set(carRef, {
         ...values,
@@ -100,6 +155,7 @@ export const firestoreCarService = {
         carId: carRef.id,
         role: 'driver',
         displayName: driver.name,
+        leg: values.leg,
         createdAt: serverTimestamp(),
       })
     })
@@ -112,27 +168,30 @@ export const firestoreCarService = {
       if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
       const car = snapshot.data()
       if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut modifier cette voiture.')
-      const values = validateCarInput(input, (car.passengers || []).length + 1)
-      transaction.update(carRef, { ...values, updatedAt: serverTimestamp() })
+      const values = validateCarInput(
+        { ...input, leg: car.leg || LEG_ALLER },
+        (car.passengers || []).length + 1,
+      )
+      transaction.update(carRef, {
+        city: values.city,
+        time: values.time,
+        seats: values.seats,
+        date: values.date,
+        leg: normalizeLeg(car.leg),
+        updatedAt: serverTimestamp(),
+      })
     })
   },
 
   async joinCar(user, carId) {
     const carRef = doc(db, 'cars', carId)
-    const membershipRef = doc(db, 'memberships', user.uid)
     await runTransaction(db, async (transaction) => {
-      const membership = await transaction.get(membershipRef)
       const snapshot = await transaction.get(carRef)
-      if (membership.exists()) {
-        const existingCarRef = doc(db, 'cars', membership.data().carId)
-        const existingCar = await transaction.get(existingCarRef)
-        if (existingCar.exists()) {
-          throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
-        }
-        transaction.delete(membershipRef)
-      }
       if (!snapshot.exists()) throw new BusinessError('Cette voiture n’existe plus.')
       const car = snapshot.data()
+      const leg = normalizeLeg(car.leg)
+      await assertFreeForLeg(transaction, user, leg)
+
       const member = publicUser(user)
       const passengers = car.passengers || []
       const waitlist = car.waitlist || []
@@ -147,11 +206,12 @@ export const firestoreCarService = {
         ],
         updatedAt: serverTimestamp(),
       })
-      transaction.set(membershipRef, {
+      transaction.set(membershipRefFor(user.uid, leg), {
         uid: user.uid,
         carId,
         role,
         displayName: member.name,
+        leg,
         createdAt: serverTimestamp(),
       })
     })
@@ -159,25 +219,38 @@ export const firestoreCarService = {
 
   async leaveCar(user, carId) {
     const carRef = doc(db, 'cars', carId)
-    const membershipRef = doc(db, 'memberships', user.uid)
     await runTransaction(db, async (transaction) => {
-      const membership = await transaction.get(membershipRef)
       const snapshot = await transaction.get(carRef)
-      if (!membership.exists() || membership.data().carId !== carId) {
-        throw new BusinessError('Votre inscription est déjà absente.')
-      }
       if (!snapshot.exists()) {
-        transaction.delete(membershipRef)
+        const modernAller = membershipRefFor(user.uid, 'aller')
+        const modernRetour = membershipRefFor(user.uid, 'retour')
+        const legacy = legacyMembershipRef(user.uid)
+        const refs = [modernAller, modernRetour, legacy]
+        const snaps = []
+        for (const ref of refs) snaps.push(await transaction.get(ref))
+        snaps.forEach((snap, index) => {
+          if (snap.exists() && snap.data().carId === carId) transaction.delete(refs[index])
+        })
         return
       }
       const car = snapshot.data()
+      const leg = normalizeLeg(car.leg)
+      const membershipRef = membershipRefFor(user.uid, leg)
+      const legacyRef = legacyMembershipRef(user.uid)
+      const membership = await transaction.get(membershipRef)
+      const legacy = leg === LEG_ALLER ? await transaction.get(legacyRef) : null
+      const active =
+        (membership.exists() && membership.data().carId === carId && membership)
+        || (legacy?.exists() && legacy.data().carId === carId && legacy)
+      if (!active) throw new BusinessError('Votre inscription est déjà absente.')
       if (car.driver.uid === user.uid) throw new BusinessError('Supprimez votre voiture pour la quitter.')
       transaction.update(carRef, {
         passengers: (car.passengers || []).filter((member) => member.uid !== user.uid),
         waitlist: (car.waitlist || []).filter((member) => member.uid !== user.uid),
         updatedAt: serverTimestamp(),
       })
-      transaction.delete(membershipRef)
+      if (membership.exists()) transaction.delete(membershipRef)
+      if (legacy?.exists() && legacy.data().carId === carId) transaction.delete(legacyRef)
     })
   },
 
@@ -186,9 +259,14 @@ export const firestoreCarService = {
     await runTransaction(db, async (transaction) => {
       const snapshot = await transaction.get(carRef)
       if (!snapshot.exists()) return
-      const car = snapshot.data()
+      const car = normalizeCar(carId, snapshot.data())
       if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut supprimer cette voiture.')
-      const membershipRefs = memberIds(normalizeCar(carId, car)).map((uid) => doc(db, 'memberships', uid))
+      const leg = car.leg
+      const membershipRefs = memberIds(car).flatMap((uid) => {
+        const refs = [membershipRefFor(uid, leg)]
+        if (leg === LEG_ALLER) refs.push(legacyMembershipRef(uid))
+        return refs
+      })
       for (const ref of membershipRefs) await transaction.get(ref)
       transaction.delete(carRef)
       membershipRefs.forEach((ref) => transaction.delete(ref))
@@ -262,11 +340,10 @@ function writeDemoCars(cars) {
   window.dispatchEvent(new Event(DEMO_EVENT))
 }
 
-function mutateDemo(user, operation) {
-  const cars = readDemoCars()
-  const occupied = cars.some((car) => memberIds(car).includes(user.uid))
-  const result = operation(cars, occupied)
-  writeDemoCars(result)
+function occupiedOnLeg(cars, uid, leg) {
+  return cars.some(
+    (car) => normalizeLeg(car.leg) === leg && memberIds(car).includes(uid),
+  )
 }
 
 export const demoCarService = {
@@ -282,47 +359,69 @@ export const demoCarService = {
   },
   async createCar(user, input) {
     const values = validateCarInput(input)
-    mutateDemo(user, (cars, occupied) => {
-      if (occupied) throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
-      return [
-        ...cars,
-        {
-          id: crypto.randomUUID(),
-          ...values,
-          driver: publicUser(user),
-          passengers: [],
-          waitlist: [],
-          trunk: [],
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        },
-      ]
-    })
+    const cars = readDemoCars()
+    if (occupiedOnLeg(cars, user.uid, values.leg)) {
+      throw new BusinessError(
+        values.leg === 'retour'
+          ? 'Vous êtes déjà lié·e à une voiture pour le retour.'
+          : 'Vous êtes déjà lié·e à une voiture pour l’aller.',
+      )
+    }
+    writeDemoCars([
+      ...cars,
+      {
+        id: crypto.randomUUID(),
+        ...values,
+        driver: publicUser(user),
+        passengers: [],
+        waitlist: [],
+        trunk: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      },
+    ])
   },
   async updateCar(user, carId, input) {
-    mutateDemo(user, (cars) =>
-      cars.map((car) => {
+    writeDemoCars(
+      readDemoCars().map((car) => {
         if (car.id !== carId) return car
         if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut modifier cette voiture.')
-        return { ...car, ...validateCarInput(input, car.passengers.length + 1), updatedAt: Date.now() }
+        const values = validateCarInput({ ...input, leg: car.leg }, car.passengers.length + 1)
+        return {
+          ...car,
+          city: values.city,
+          time: values.time,
+          seats: values.seats,
+          date: values.date,
+          updatedAt: Date.now(),
+        }
       }),
     )
   },
   async joinCar(user, carId) {
-    mutateDemo(user, (cars, occupied) => {
-      if (occupied) throw new BusinessError('Vous êtes déjà lié·e à une voiture.')
-      return cars.map((car) => {
+    const cars = readDemoCars()
+    const target = cars.find((car) => car.id === carId)
+    if (!target) throw new BusinessError('Cette voiture n’existe plus.')
+    if (occupiedOnLeg(cars, user.uid, target.leg)) {
+      throw new BusinessError(
+        target.leg === 'retour'
+          ? 'Vous êtes déjà lié·e à une voiture pour le retour.'
+          : 'Vous êtes déjà lié·e à une voiture pour l’aller.',
+      )
+    }
+    writeDemoCars(
+      cars.map((car) => {
         if (car.id !== carId) return car
         const member = publicUser(user)
         if (car.passengers.length + 1 < car.seats) return { ...car, passengers: [...car.passengers, member] }
         if (car.waitlist.length >= 30) throw new BusinessError('La liste d’attente est complète.')
         return { ...car, waitlist: [...car.waitlist, member] }
-      })
-    })
+      }),
+    )
   },
   async leaveCar(user, carId) {
-    mutateDemo(user, (cars) =>
-      cars.map((car) => {
+    writeDemoCars(
+      readDemoCars().map((car) => {
         if (car.id !== carId) return car
         if (car.driver.uid === user.uid) throw new BusinessError('Supprimez votre voiture pour la quitter.')
         return {
@@ -334,8 +433,8 @@ export const demoCarService = {
     )
   },
   async deleteCar(user, carId) {
-    mutateDemo(user, (cars) =>
-      cars.filter((car) => {
+    writeDemoCars(
+      readDemoCars().filter((car) => {
         if (car.id !== carId) return true
         if (car.driver.uid !== user.uid) throw new BusinessError('Seul le conducteur peut supprimer cette voiture.')
         return false
@@ -344,8 +443,8 @@ export const demoCarService = {
   },
   async addTrunkItem(user, carId, text) {
     const clean = validateTrunkText(text)
-    mutateDemo(user, (cars) =>
-      cars.map((car) => {
+    writeDemoCars(
+      readDemoCars().map((car) => {
         if (car.id !== carId) return car
         return {
           ...car,
@@ -366,8 +465,8 @@ export const demoCarService = {
   },
   async updateTrunkItem(user, carId, itemId, text) {
     const clean = validateTrunkText(text)
-    mutateDemo(user, (cars) =>
-      cars.map((car) => {
+    writeDemoCars(
+      readDemoCars().map((car) => {
         if (car.id !== carId) return car
         return {
           ...car,
@@ -378,8 +477,8 @@ export const demoCarService = {
     )
   },
   async removeTrunkItem(user, carId, itemId) {
-    mutateDemo(user, (cars) =>
-      cars.map((car) => {
+    writeDemoCars(
+      readDemoCars().map((car) => {
         if (car.id !== carId) return car
         return {
           ...car,

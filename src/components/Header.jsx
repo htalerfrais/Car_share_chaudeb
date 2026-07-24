@@ -6,9 +6,9 @@ export function Header({ isDemo, photoURL }) {
 
   return (
     <header className="site-header">
-      <a className="brand" href="/" aria-label="En voiture, accueil">
+      <a className="brand" href="/" aria-label="Chaudebonne la guerre, accueil">
         <span className="brand-mark" aria-hidden="true">↗</span>
-        <span>En voiture !</span>
+        <span>Chaudebonne la guerre</span>
       </a>
       {user && (
         <div className="profile">

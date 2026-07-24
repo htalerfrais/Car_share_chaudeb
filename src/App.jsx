@@ -9,6 +9,7 @@ import { useAuth } from './contexts/AuthContext'
 import { useCars } from './hooks/useCars'
 import { useProfiles } from './hooks/useProfiles'
 import { firebaseConfigured } from './lib/firebase'
+import { LEG_ALLER, LEG_RETOUR, freeSeats } from './lib/trip'
 
 function errorMessage(error) {
   if (error?.code === 'permission-denied') {
@@ -17,6 +18,13 @@ function errorMessage(error) {
   if (error?.code === 'unavailable') return 'Service temporairement indisponible. Réessayez dans un instant.'
   if (error?.code === 'auth/popup-closed-by-user') return 'La fenêtre de connexion a été fermée.'
   return error?.message || 'Une erreur inattendue est survenue.'
+}
+
+function findUserCar(cars, user) {
+  if (!user) return null
+  return cars.find((car) =>
+    [car.driver, ...car.passengers, ...car.waitlist].some((member) => member.uid === user.uid),
+  ) || null
 }
 
 function ConfigurationScreen({ onUseDemo }) {
@@ -59,12 +67,20 @@ export default function App() {
   const [editingCar, setEditingCar] = useState(null)
   const [deletingCar, setDeletingCar] = useState(null)
   const [proposing, setProposing] = useState(false)
+  const [activeLeg, setActiveLeg] = useState(LEG_ALLER)
 
   const notify = useCallback((message, type = 'success') => setToast({ message, type }), [])
-  const userCar = useMemo(
-    () => user && cars.find((car) => [car.driver, ...car.passengers, ...car.waitlist].some((member) => member.uid === user.uid)),
-    [cars, user],
-  )
+
+  const allerCars = useMemo(() => cars.filter((car) => car.leg === LEG_ALLER), [cars])
+  const retourCars = useMemo(() => cars.filter((car) => car.leg === LEG_RETOUR), [cars])
+  const visibleCars = activeLeg === LEG_RETOUR ? retourCars : allerCars
+
+  const userCarAller = useMemo(() => findUserCar(allerCars, user), [allerCars, user])
+  const userCarRetour = useMemo(() => findUserCar(retourCars, user), [retourCars, user])
+  const userCar = activeLeg === LEG_RETOUR ? userCarRetour : userCarAller
+
+  const freeAller = useMemo(() => allerCars.reduce((total, car) => total + freeSeats(car), 0), [allerCars])
+  const freeRetour = useMemo(() => retourCars.reduce((total, car) => total + freeSeats(car), 0), [retourCars])
 
   const profileUids = useMemo(() => {
     const ids = []
@@ -98,6 +114,12 @@ export default function App() {
     }
   }
 
+  function switchLeg(nextLeg) {
+    setActiveLeg(nextLeg)
+    setProposing(false)
+    setEditingCar(null)
+  }
+
   if (authLoading) return <div className="loading-screen">Chargement…</div>
 
   if (needsConfiguration) {
@@ -128,20 +150,58 @@ export default function App() {
     <>
       <Header isDemo={isDemo} photoURL={photoURL} />
       <main className={`app-shell ${userCar ? '' : 'has-dock'}`}>
-        <section className="hero">
-          <div>
-            <span className="eyebrow">Notre prochain trajet</span>
-            <h1>Bonjour {user.firstName},<br />on part ensemble ?</h1>
+        <section className="dash-bar" aria-label="Tableau de bord">
+          <div className="dash-stats">
+            <div className="dash-stat">
+              <strong>{freeAller}</strong>
+              <span>places aller</span>
+            </div>
+            <div className="dash-stat">
+              <strong>{freeRetour}</strong>
+              <span>places retour</span>
+            </div>
+            <div className="dash-stat">
+              <strong>{allerCars.length + retourCars.length}</strong>
+              <span>voitures</span>
+            </div>
           </div>
-          <div className="hero-stat">
-            <strong>{cars.reduce((total, car) => total + Math.max(0, car.seats - car.passengers.length - 1), 0)}</strong>
-            <span>places disponibles</span>
-          </div>
+          <p className="dash-status">
+            {userCarAller || userCarRetour
+              ? [
+                  userCarAller ? `Aller : ${userCarAller.city}` : null,
+                  userCarRetour ? `Retour : ${userCarRetour.city}` : null,
+                ].filter(Boolean).join(' · ')
+              : 'Pas encore inscrit·e sur un trajet'}
+          </p>
         </section>
+
+        <div className="leg-tabs" role="tablist" aria-label="Sens du trajet">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeLeg === LEG_ALLER}
+            className={`leg-tab ${activeLeg === LEG_ALLER ? 'is-active' : ''}`}
+            onClick={() => switchLeg(LEG_ALLER)}
+          >
+            Aller
+            <span>{allerCars.length}</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeLeg === LEG_RETOUR}
+            className={`leg-tab ${activeLeg === LEG_RETOUR ? 'is-active' : ''}`}
+            onClick={() => switchLeg(LEG_RETOUR)}
+          >
+            Retour
+            <span>{retourCars.length}</span>
+          </button>
+        </div>
 
         {(proposing || editingCar) && (
           <AddCarForm
             car={editingCar}
+            leg={activeLeg}
             onCancel={() => {
               setProposing(false)
               setEditingCar(null)
@@ -152,7 +212,10 @@ export default function App() {
                 if (saved) setEditingCar(null)
                 return saved
               }
-              const saved = await run(() => service.createCar(user, values), 'Votre voiture est proposée.')
+              const saved = await run(
+                () => service.createCar(user, { ...values, leg: activeLeg }),
+                'Votre voiture est proposée.',
+              )
               if (saved) setProposing(false)
               return saved
             }}
@@ -162,10 +225,12 @@ export default function App() {
         <section className="cars-section">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">Les propositions</span>
-              <h2>Voitures disponibles</h2>
+              <span className="eyebrow">{activeLeg === LEG_RETOUR ? 'Depuis Chaudebonne' : 'Vers Chaudebonne'}</span>
+              <h2>{activeLeg === LEG_RETOUR ? 'Voitures retour' : 'Voitures aller'}</h2>
             </div>
-            <span className="count-pill">{cars.length} {cars.length > 1 ? 'voitures' : 'voiture'}</span>
+            <span className="count-pill">
+              {visibleCars.length} {visibleCars.length > 1 ? 'voitures' : 'voiture'}
+            </span>
           </div>
           {loading ? (
             <div className="loading-panel panel">Chargement des voitures…</div>
@@ -176,7 +241,8 @@ export default function App() {
             </div>
           ) : (
             <CarList
-              cars={cars}
+              cars={visibleCars}
+              leg={activeLeg}
               user={user}
               userCarId={userCar?.id}
               profiles={profiles}
@@ -200,7 +266,12 @@ export default function App() {
         </section>
       </main>
 
-      <UserDock user={user} photoURL={photoURL} visible={!userCar} />
+      <UserDock
+        user={user}
+        photoURL={photoURL}
+        visible={!userCar}
+        leg={activeLeg}
+      />
 
       <ConfirmDialog
         car={deletingCar}

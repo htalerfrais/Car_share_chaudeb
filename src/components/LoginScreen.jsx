@@ -21,9 +21,9 @@ export function LoginScreen({ onError }) {
   return (
     <main className="login-layout">
       <section className="login-card">
-        <div className="eyebrow">Trajet unique · équipe Chaudeb</div>
-        <h1>Le trajet commence ici.</h1>
-        <p>Proposez une voiture ou trouvez votre place en quelques secondes.</p>
+        <div className="eyebrow">Chaudebonne la guerre</div>
+        <h1>Aller · Retour · Ensemble.</h1>
+        <p>Proposez une voiture ou trouvez votre place pour l’aller et le retour.</p>
         <form onSubmit={handleSubmit}>
           {mode === 'mock' && (
             <label>

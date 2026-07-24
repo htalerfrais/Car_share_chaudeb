@@ -1,6 +1,6 @@
-# En voiture !
+# Chaudebonne la guerre
 
-Application React de covoiturage pour un trajet unique. Elle propose une authentification interchangeable (profil local ou Google/Firebase Auth), une liste de voitures Firestore en temps réel et un mode démo local explicite pour découvrir l'interface sans credentials.
+Application React de covoiturage aller/retour. Authentification Google (ou mock), listes de voitures Firestore en temps réel, coffre partagé, et mode démo local sans credentials.
 
 ## Fonctionnalités
 
@@ -72,33 +72,30 @@ Le mode `mock` n'émet aucun token Firebase. Il est donc volontairement incompat
 ### `cars/{carId}`
 
 ```text
-city: string (2..80)
+leg: "aller" | "retour"   // lecture legacy → aller
+date: string (YYYY-MM-DD) // lecture legacy → 2026-07-31
+city: string (2..80)      // aller = départ ; retour = destination
 time: string (HH:mm)
 seats: integer (1..8, conducteur inclus)
 driver: { uid, name }
 passengers: Array<{ uid, name }> (0..7)
 waitlist: Array<{ uid, name }> (0..30)
+trunk: Array<{ id, text, authorUid, authorName, createdAt }>
 createdAt, updatedAt: Timestamp
 ```
 
-### `memberships/{uid}`
+### `memberships/{uid}__{leg}`
 
 ```text
 uid: string
 carId: string
 role: "driver" | "passenger" | "waitlist"
+leg: "aller" | "retour"
 displayName: string
 createdAt: Timestamp
 ```
 
-Toutes les opérations d'inscription utilisent une transaction :
-
-1. lecture de `memberships/{uid}` et refus s'il existe ;
-2. lecture et validation de la voiture ;
-3. ajout à `passengers` si une place est libre, sinon à `waitlist` ;
-4. création du membership correspondant dans la même transaction.
-
-Quitter effectue l'opération inverse. La suppression lit les membres référencés, puis supprime la voiture et leurs memberships dans une transaction. La waitlist n'est jamais promue automatiquement.
+Un utilisateur peut être sur une voiture aller **et** une voiture retour. Les anciens docs `memberships/{uid}` restent gérés pour l'aller.
 
 ## Règles et limites de sécurité
 

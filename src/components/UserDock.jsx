@@ -1,6 +1,6 @@
 import { Avatar } from './Avatar'
 
-export function UserDock({ user, photoURL, visible }) {
+export function UserDock({ user, photoURL, visible, leg }) {
   if (!visible) return null
 
   return (
@@ -11,7 +11,11 @@ export function UserDock({ user, photoURL, visible }) {
         </div>
         <div>
           <strong>{user.firstName}</strong>
-          <p>Vous n’êtes dans aucune voiture. Montez à bord ou proposez la vôtre.</p>
+          <p>
+            {leg === 'retour'
+              ? 'Pas encore de voiture pour le retour. Montez ou proposez la vôtre.'
+              : 'Pas encore de voiture pour l’aller. Montez ou proposez la vôtre.'}
+          </p>
         </div>
       </div>
     </aside>

@@ -1,8 +1,16 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  LEGACY_DEFAULT_DATE,
+  LEG_ALLER,
+  cityLabel,
+  daysInMonth,
+  joinISODate,
+  splitISODate,
+  todayISO,
+} from '../lib/trip'
 
 const HOURS = Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, '0'))
 const MINUTES = ['00', '05', '10', '15', '20', '25', '30', '35', '40', '45', '50', '55']
-const EMPTY_FORM = { city: '', time: '08:00', seats: 4 }
 
 function snapMinute(minute) {
   const value = Number(minute)
@@ -20,30 +28,76 @@ function splitTime(time) {
   }
 }
 
-export function AddCarForm({ car, onSave, onCancel }) {
-  const [values, setValues] = useState(EMPTY_FORM)
+function defaultForm(leg) {
+  return {
+    city: '',
+    time: '08:00',
+    seats: 4,
+    date: todayISO() > LEGACY_DEFAULT_DATE ? todayISO() : LEGACY_DEFAULT_DATE,
+    leg: leg || LEG_ALLER,
+  }
+}
+
+export function AddCarForm({ car, leg = LEG_ALLER, onSave, onCancel }) {
+  const activeLeg = car?.leg || leg
+  const [values, setValues] = useState(() => defaultForm(activeLeg))
   const [submitting, setSubmitting] = useState(false)
   const { hour, minute } = splitTime(values.time)
+  const { year, month, day } = splitISODate(values.date)
+  const cityTitle = cityLabel(activeLeg)
+  const cityPlaceholder = activeLeg === 'retour' ? 'Ex. Lyon' : 'Ex. Paris'
+
+  const years = useMemo(() => {
+    const current = new Date().getFullYear()
+    return [current, current + 1, current + 2].map(String)
+  }, [])
+
+  const maxDay = daysInMonth(year, month)
+  const days = useMemo(
+    () => Array.from({ length: maxDay }, (_, index) => String(index + 1).padStart(2, '0')),
+    [maxDay],
+  )
 
   useEffect(() => {
-    setValues(car ? { city: car.city, time: car.time, seats: car.seats } : EMPTY_FORM)
-  }, [car])
+    if (car) {
+      setValues({
+        city: car.city,
+        time: car.time,
+        seats: car.seats,
+        date: car.date || LEGACY_DEFAULT_DATE,
+        leg: car.leg || LEG_ALLER,
+      })
+    } else {
+      setValues(defaultForm(leg))
+    }
+  }, [car, leg])
+
+  useEffect(() => {
+    if (Number(day) > maxDay) {
+      setValues((current) => ({ ...current, date: joinISODate(year, month, maxDay) }))
+    }
+  }, [day, maxDay, month, year])
 
   function update(field, value) {
     setValues((current) => ({ ...current, [field]: value }))
   }
 
   function updateTimePart(part, value) {
-    const next = part === 'hour' ? `${value}:${minute}` : `${hour}:${value}`
-    update('time', next)
+    update('time', part === 'hour' ? `${value}:${minute}` : `${hour}:${value}`)
+  }
+
+  function updateDatePart(part, value) {
+    const next = { year, month, day, [part]: value }
+    const cappedDay = Math.min(Number(next.day), daysInMonth(next.year, next.month))
+    update('date', joinISODate(next.year, next.month, cappedDay))
   }
 
   async function submit(event) {
     event.preventDefault()
     setSubmitting(true)
     try {
-      const saved = await onSave(values)
-      if (!car && saved !== false) setValues(EMPTY_FORM)
+      const saved = await onSave({ ...values, leg: activeLeg })
+      if (!car && saved !== false) setValues(defaultForm(activeLeg))
     } finally {
       setSubmitting(false)
     }
@@ -53,49 +107,62 @@ export function AddCarForm({ car, onSave, onCancel }) {
     <form className="car-form panel" onSubmit={submit}>
       <div className="panel-heading">
         <div>
-          <span className="eyebrow">{car ? 'Mise à jour' : 'Conducteur'}</span>
+          <span className="eyebrow">{car ? 'Mise à jour' : activeLeg === 'retour' ? 'Retour' : 'Aller'}</span>
           <h2>{car ? 'Modifier ma voiture' : 'Je propose une voiture'}</h2>
         </div>
         {onCancel && <button type="button" className="icon-button" onClick={onCancel} aria-label="Fermer">×</button>}
       </div>
-      <div className="form-grid">
+      <div className="form-grid form-grid-trip">
         <label>
-          Ville de départ
+          {cityTitle}
           <input
             required
             minLength="2"
             maxLength="80"
             value={values.city}
             onChange={(event) => update('city', event.target.value)}
-            placeholder="Ex. Lyon"
+            placeholder={cityPlaceholder}
           />
         </label>
+        <fieldset className="time-field">
+          <legend>Date de départ</legend>
+          <div className="date-picker" role="group" aria-label="Date de départ">
+            <label className="time-part">
+              <span className="visually-hidden">Jour</span>
+              <select value={day} onChange={(event) => updateDatePart('day', event.target.value)} aria-label="Jour">
+                {days.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+            <label className="time-part">
+              <span className="visually-hidden">Mois</span>
+              <select value={month} onChange={(event) => updateDatePart('month', event.target.value)} aria-label="Mois">
+                {Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, '0')).map((value) => (
+                  <option key={value} value={value}>{value}</option>
+                ))}
+              </select>
+            </label>
+            <label className="time-part">
+              <span className="visually-hidden">Année</span>
+              <select value={year} onChange={(event) => updateDatePart('year', event.target.value)} aria-label="Année">
+                {years.map((value) => <option key={value} value={value}>{value}</option>)}
+              </select>
+            </label>
+          </div>
+        </fieldset>
         <fieldset className="time-field">
           <legend>Heure de départ</legend>
           <div className="time-picker" role="group" aria-label="Heure de départ, format 24 heures">
             <label className="time-part">
               <span className="visually-hidden">Heure</span>
-              <select
-                value={hour}
-                onChange={(event) => updateTimePart('hour', event.target.value)}
-                aria-label="Heure"
-              >
-                {HOURS.map((value) => (
-                  <option key={value} value={value}>{value} h</option>
-                ))}
+              <select value={hour} onChange={(event) => updateTimePart('hour', event.target.value)} aria-label="Heure">
+                {HOURS.map((value) => <option key={value} value={value}>{value} h</option>)}
               </select>
             </label>
             <span className="time-separator" aria-hidden="true">:</span>
             <label className="time-part">
               <span className="visually-hidden">Minutes</span>
-              <select
-                value={minute}
-                onChange={(event) => updateTimePart('minute', event.target.value)}
-                aria-label="Minutes"
-              >
-                {MINUTES.map((value) => (
-                  <option key={value} value={value}>{value}</option>
-                ))}
+              <select value={minute} onChange={(event) => updateTimePart('minute', event.target.value)} aria-label="Minutes">
+                {MINUTES.map((value) => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
           </div>

@@ -2,6 +2,7 @@ import { Avatar } from './Avatar'
 import { CarVisual } from './CarVisual'
 import { Trunk } from './Trunk'
 import { Waitlist } from './Waitlist'
+import { cityLabel, formatDateFR } from '../lib/trip'
 
 export function CarCard({
   car,
@@ -23,13 +24,17 @@ export function CarCard({
   const available = Math.max(0, car.seats - car.passengers.length - 1)
   const isLinkedElsewhere = Boolean(userCarId && userCarId !== car.id)
   const timeLabel = car.time.replace(':', ' h ')
+  const placePrefix = cityLabel(car.leg)
 
   return (
     <article className={`car-card ${isDriver || isPassenger || isWaiting ? 'car-card-active' : ''}`}>
       <div className="car-card-top">
         <div>
-          <span className="eyebrow">{timeLabel}</span>
-          <h3>{car.city}</h3>
+          <span className="eyebrow">{formatDateFR(car.date)} · {timeLabel}</span>
+          <h3>
+            <span className="city-prefix">{placePrefix}</span>
+            {car.city}
+          </h3>
           <p className="driver-meta">
             <Avatar name={car.driver.name} photoURL={profiles[car.driver.uid]?.photoURL} size="xs" />
             <span><strong>{car.driver.name}</strong> au volant</span>
@@ -65,12 +70,16 @@ export function CarCard({
           </button>
         )}
       </div>
-      {isLinkedElsewhere && <p className="card-note">Vous êtes déjà dans une autre voiture.</p>}
+      {isLinkedElsewhere && (
+        <p className="card-note">
+          Vous êtes déjà dans une autre voiture pour {car.leg === 'retour' ? 'le retour' : 'l’aller'}.
+        </p>
+      )}
     </article>
   )
 }
 
-export function GhostCarCard({ onClick, disabled }) {
+export function GhostCarCard({ onClick, disabled, leg }) {
   return (
     <button type="button" className="car-card ghost-car" onClick={onClick} disabled={disabled}>
       <div className="ghost-car-visual" aria-hidden="true">
@@ -81,7 +90,11 @@ export function GhostCarCard({ onClick, disabled }) {
         </div>
       </div>
       <strong>Ma voiture</strong>
-      <span>Proposez une voiture et prenez le volant</span>
+      <span>
+        {leg === 'retour'
+          ? 'Proposez un retour depuis Chaudebonne'
+          : 'Proposez un aller vers Chaudebonne'}
+      </span>
     </button>
   )
 }
