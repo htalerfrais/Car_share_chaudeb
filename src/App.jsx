@@ -15,6 +15,9 @@ function errorMessage(error) {
   if (error?.code === 'permission-denied') {
     return 'Accès refusé par Firestore. Vérifiez la connexion Google et les règles déployées.'
   }
+  if (error?.code === 'failed-precondition') {
+    return 'Transaction Firestore invalide (rechargez la page puis réessayez).'
+  }
   if (error?.code === 'unavailable') return 'Service temporairement indisponible. Réessayez dans un instant.'
   if (error?.code === 'auth/popup-closed-by-user') return 'La fenêtre de connexion a été fermée.'
   return error?.message || 'Une erreur inattendue est survenue.'
@@ -107,6 +110,7 @@ export default function App() {
       if (successMessage) notify(successMessage)
       return true
     } catch (actionError) {
+      console.error('[car-share]', actionError?.code, actionError)
       notify(errorMessage(actionError), 'error')
       return false
     } finally {

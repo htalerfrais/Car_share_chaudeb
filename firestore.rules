@@ -21,6 +21,13 @@ service cloud.firestore {
       return ('leg' in data && data.leg == 'retour') ? 'retour' : 'aller';
     }
 
+    function validSeats(value) {
+      return (value is int || value is float)
+        && value >= 1
+        && value <= 8
+        && value == math.floor(value);
+    }
+
     function validPublicMember(member) {
       return member is map
         && member.keys().hasOnly(['uid', 'name'])
@@ -54,9 +61,7 @@ service cloud.firestore {
         && data.city.size() <= 80
         && data.time is string
         && data.time.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
-        && data.seats is int
-        && data.seats >= 1
-        && data.seats <= 8
+        && validSeats(data.seats)
         && (!('leg' in data) || data.leg in ['aller', 'retour'])
         && (!('date' in data) || validDate(data.date))
         && validPublicMember(data.driver)
@@ -145,11 +150,14 @@ service cloud.firestore {
         && validTrunk(request.resource.data.trunk);
     }
 
+    // Pas de !exists(membership) : assertFreeForLeg peut supprimer un orphelin
+    // puis recréer le membership dans la même transaction (exists reste true avant écriture).
+    // La protection anti-double inscription reste sur memberships (update interdit ;
+    // delete orphelin seulement si la voiture liée a disparu / plus de présence).
     function joining(carId, listName, role) {
       let leg = carLeg(resource.data);
       let membership = getAfter(membershipPath(request.auth.uid, leg)).data;
-      return !exists(membershipPath(request.auth.uid, leg))
-        && existsAfter(membershipPath(request.auth.uid, leg))
+      return existsAfter(membershipPath(request.auth.uid, leg))
         && validMembership(membership)
         && membership.uid == request.auth.uid
         && membership.carId == carId
@@ -179,18 +187,6 @@ service cloud.firestore {
         && !request.resource.data[listName].hasAny([memberFromMembership(membership)]);
     }
 
-    function membershipMatchesCar(data) {
-      let car = getAfter(carPath(data.carId)).data;
-      let member = memberFromMembership(data);
-      return existsAfter(carPath(data.carId))
-        && carLeg(car) == data.leg
-        && (
-          (data.role == 'driver' && car.driver == member)
-          || (data.role == 'passenger' && car.passengers.hasAny([member]))
-          || (data.role == 'waitlist' && car.waitlist.hasAny([member]))
-        );
-    }
-
     function membershipRemovedFromCar(data) {
       return !existsAfter(carPath(data.carId))
         || (
@@ -201,9 +197,24 @@ service cloud.firestore {
         );
     }
 
+    // get() sur un membership absent : resource est null, donc ne pas exiger resource.data.
+    // Autoriser par chemin (uid connu) pour create/join qui sondent avant d'écrire.
+    function isOwnMembershipId(membershipId) {
+      return membershipId == request.auth.uid
+        || membershipId == request.auth.uid + '__aller'
+        || membershipId == request.auth.uid + '__retour';
+    }
+
+    function isDriverOfMembershipCar(data) {
+      return exists(carPath(data.carId))
+        && get(carPath(data.carId)).data.driver.uid == request.auth.uid;
+    }
+
     match /cars/{carId} {
       allow read: if isAuthenticated();
 
+      // Pas de existsAfter(membership) ici : ça créait une dépendance circulaire
+      // avec memberships.create → getAfter(car) dans la même transaction.
       allow create: if isAuthenticated()
         && validCar(request.resource.data)
         && request.resource.data.leg in ['aller', 'retour']
@@ -212,17 +223,13 @@ service cloud.firestore {
         && request.resource.data.passengers.size() == 0
         && request.resource.data.waitlist.size() == 0
         && request.resource.data.trunk.size() == 0
-        && request.resource.data.createdAt == request.time
-        && request.resource.data.updatedAt == request.time
-        && existsAfter(membershipPath(request.auth.uid, request.resource.data.leg))
-        && getAfter(membershipPath(request.auth.uid, request.resource.data.leg)).data.carId == carId
-        && getAfter(membershipPath(request.auth.uid, request.resource.data.leg)).data.role == 'driver'
-        && getAfter(membershipPath(request.auth.uid, request.resource.data.leg)).data.leg == request.resource.data.leg;
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
 
       allow update: if isAuthenticated()
         && validCar(request.resource.data)
         && unchangedCarIdentity()
-        && request.resource.data.updatedAt == request.time
+        && request.resource.data.updatedAt is timestamp
         && (
           driverEditOnly()
           || trunkEditOnly()
@@ -238,15 +245,19 @@ service cloud.firestore {
     }
 
     match /memberships/{membershipId} {
-      allow read: if isAuthenticated()
-        && resource.data.uid == request.auth.uid;
+      allow get: if isAuthenticated() && (
+        isOwnMembershipId(membershipId)
+        || (resource != null && isDriverOfMembershipCar(resource.data))
+      );
+      allow list: if false;
 
+      // Pas de membershipMatchesCar/getAfter(car) à la création : même raison circulaire.
+      // L'app crée membership + voiture dans une seule transaction.
       allow create: if isAuthenticated()
         && validMembership(request.resource.data)
         && request.resource.data.uid == request.auth.uid
         && membershipId == request.resource.data.uid + '__' + request.resource.data.leg
-        && request.resource.data.createdAt == request.time
-        && membershipMatchesCar(request.resource.data);
+        && request.resource.data.createdAt is timestamp;
 
       allow update: if false;
 
@@ -257,6 +268,12 @@ service cloud.firestore {
             exists(carPath(resource.data.carId))
             && get(carPath(resource.data.carId)).data.driver.uid == request.auth.uid
             && !existsAfter(carPath(resource.data.carId))
+          )
+          // Anciens docs memberships/{uid} sans champ leg (avant aller/retour).
+          || (
+            resource.data.uid == request.auth.uid
+            && !('leg' in resource.data)
+            && membershipId == resource.data.uid
           )
         );
     }

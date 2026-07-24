@@ -28,7 +28,10 @@ export class BusinessError extends Error {
   }
 }
 
-const publicUser = (user) => ({ uid: user.uid, name: user.firstName || user.displayName })
+const publicUser = (user) => ({
+  uid: user.uid,
+  name: String(user.firstName || user.displayName || 'Utilisateur').trim().slice(0, 40) || 'Utilisateur',
+})
 const memberIds = (car) => [
   car.driver.uid,
   ...car.passengers.map((member) => member.uid),
@@ -39,7 +42,7 @@ const trunkOf = (car) => (Array.isArray(car.trunk) ? car.trunk : [])
 function validateCarInput(input, minimumSeats = 1, { requireFutureDate = true } = {}) {
   const city = input.city.trim()
   const time = input.time.trim()
-  const seats = Number(input.seats)
+  const seats = Math.trunc(Number(input.seats))
   const leg = normalizeLeg(input.leg)
   const date = (input.date || '').trim()
 
@@ -95,10 +98,20 @@ function legacyMembershipRef(uid) {
 
 async function assertFreeForLeg(transaction, user, leg) {
   const modernRef = membershipRefFor(user.uid, leg)
+  const legacyRef = leg === LEG_ALLER ? legacyMembershipRef(user.uid) : null
+
   const modern = await transaction.get(modernRef)
+  const modernCar = modern.exists()
+    ? await transaction.get(doc(db, 'cars', modern.data().carId))
+    : null
+
+  const legacy = legacyRef ? await transaction.get(legacyRef) : null
+  const legacyCar = legacy?.exists()
+    ? await transaction.get(doc(db, 'cars', legacy.data().carId))
+    : null
+
   if (modern.exists()) {
-    const existingCar = await transaction.get(doc(db, 'cars', modern.data().carId))
-    if (existingCar.exists()) {
+    if (modernCar.exists()) {
       throw new BusinessError(
         leg === 'retour'
           ? 'Vous êtes déjà lié·e à une voiture pour le retour.'
@@ -108,20 +121,11 @@ async function assertFreeForLeg(transaction, user, leg) {
     transaction.delete(modernRef)
   }
 
-  // Anciens docs memberships/{uid} (avant aller/retour) : valables pour l'aller uniquement.
-  if (leg === LEG_ALLER) {
-    const legacyRef = legacyMembershipRef(user.uid)
-    const legacy = await transaction.get(legacyRef)
-    if (legacy.exists()) {
-      const existingCar = await transaction.get(doc(db, 'cars', legacy.data().carId))
-      if (existingCar.exists()) {
-        const existingLeg = normalizeLeg(existingCar.data().leg)
-        if (existingLeg === LEG_ALLER) {
-          throw new BusinessError('Vous êtes déjà lié·e à une voiture pour l’aller.')
-        }
-      }
-      transaction.delete(legacyRef)
+  if (legacy?.exists()) {
+    if (legacyCar?.exists() && normalizeLeg(legacyCar.data().leg) === LEG_ALLER) {
+      throw new BusinessError('Vous êtes déjà lié·e à une voiture pour l’aller.')
     }
+    transaction.delete(legacyRef)
   }
 }
 
