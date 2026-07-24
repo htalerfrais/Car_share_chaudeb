@@ -64,7 +64,12 @@ export default function App() {
       (configuredDataMode === 'firestore' && (!firebaseConfigured || authMode !== 'google'))
       || (configuredDataMode === 'demo' && authMode !== 'mock')
     )
-  const { cars, loading, error, service, isDemo } = useCars(forceDemo || needsConfiguration)
+  const forceDemoData = forceDemo || needsConfiguration
+  // Ne pas écouter Firestore avant Auth : sinon permission-denied figé jusqu'au refresh.
+  const { cars, loading, error, service, isDemo } = useCars({
+    forceDemo: forceDemoData,
+    enabled: forceDemoData || Boolean(user),
+  })
   const [toast, setToast] = useState(null)
   const [busy, setBusy] = useState(false)
   const [editingCar, setEditingCar] = useState(null)

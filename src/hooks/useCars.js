@@ -1,15 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useLayoutEffect, useMemo, useState } from 'react'
 import { demoCarService, firestoreCarService } from '../services/carService'
 
-export function useCars(forceDemo = false) {
+export function useCars({ forceDemo = false, enabled = true } = {}) {
   const configuredMode = import.meta.env.VITE_DATA_MODE || 'firestore'
   const isDemo = forceDemo || configuredMode === 'demo'
   const service = useMemo(() => (isDemo ? demoCarService : firestoreCarService), [isDemo])
   const [cars, setCars] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(enabled)
   const [error, setError] = useState(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    if (!enabled) {
+      setCars([])
+      setError(null)
+      setLoading(false)
+      return undefined
+    }
+
     setLoading(true)
     setError(null)
     return service.subscribe(
@@ -22,7 +29,7 @@ export function useCars(forceDemo = false) {
         setLoading(false)
       },
     )
-  }, [service])
+  }, [service, enabled])
 
   return { cars, loading, error, service, isDemo }
 }
